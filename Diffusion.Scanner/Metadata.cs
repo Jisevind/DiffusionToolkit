@@ -7,6 +7,7 @@ using Directory = MetadataExtractor.Directory;
 using Dir = System.IO.Directory;
 using System.Globalization;
 using MetadataExtractor.Formats.WebP;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace Diffusion.IO;
 
@@ -46,6 +47,8 @@ public class Metadata
 
                     var isComfyUI = directories.Any(d => d.Name == "PNG-tEXt" && d.Tags.Any(t => t.Name == "Textual Data" && t.Description.StartsWith("prompt: ")));
 
+                    var isFooocusMRE = directories.Any(d => d.Name == "PNG-tEXt" && d.Tags.Any(t => t.Name == "Textual Data" && t.Description.StartsWith("Comment")));
+
                     if (isInvokeAINew)
                     {
                         fileParameters = ReadInvokeAIParametersNew(file, directories);
@@ -61,6 +64,10 @@ public class Metadata
                     else if (isComfyUI)
                     {
                         fileParameters = ReadComfyUIParameters(file, directories);
+                    }
+                    else if (isFooocusMRE)
+                    {
+                        fileParameters = ReadFooocusMREParameters(file, directories);
                     }
                     else
                     {
@@ -83,7 +90,6 @@ public class Metadata
                             }
                         }
                     }
-
 
                     break;
                 }
@@ -200,6 +206,75 @@ public class Metadata
                         break;
                 }
             }
+
+            fp.OtherParameters = $"Steps: {fp.Steps} Sampler: {fp.Sampler} CFG Scale: {fp.CFGScale} Size: {fp.Width}x{fp.Height}";
+
+            return fp;
+        }
+
+        return null;
+    }
+
+    private static FileParameters ReadFooocusMREParameters(string file, IEnumerable<Directory> directories)
+    {
+        if (TryFindTag(directories, "PNG-tEXt", "Textual Data", tag => tag.Description.StartsWith("Comment"), out var tag))
+        {
+            var fp = new FileParameters();
+            var json = tag.Description.Substring("Comment: ".Length);
+            var root = JsonDocument.Parse(json);
+
+            fp.Prompt = root.RootElement.GetProperty("prompt").GetString();
+
+            string real_prompt;
+
+            try
+            {
+                var real_prompt_array = root.RootElement.GetProperty("real_prompt").EnumerateArray();
+                real_prompt = string.Join(", ", real_prompt_array);
+
+                if (!string.IsNullOrEmpty(real_prompt))
+                {
+                    if (!string.IsNullOrEmpty(fp.Prompt))
+                        fp.Prompt += ", ";
+
+                    fp.Prompt += real_prompt;
+                }
+            }
+            catch
+            {
+                // Ignore real_prompt if it fails
+            }
+
+            fp.NegativePrompt = root.RootElement.GetProperty("negative_prompt").GetString();
+
+            string real_negative_prompt;
+
+            try
+            {
+                var real_negative_prompt_array = root.RootElement.GetProperty("real_negative_prompt").EnumerateArray();
+                real_negative_prompt = string.Join(", ", real_negative_prompt_array);
+
+                if (!string.IsNullOrEmpty(real_negative_prompt))
+                {
+                    if (!string.IsNullOrEmpty(fp.NegativePrompt))
+                        fp.NegativePrompt += ", ";
+
+                    fp.NegativePrompt += real_negative_prompt;
+                }
+            }
+            catch
+            {
+                // Ignore real_negative_prompt if it fails
+            }
+
+            fp.PromptStrength = root.RootElement.GetProperty("positive_prompt_strength").GetDecimal();
+            fp.Steps = root.RootElement.GetProperty("steps").GetInt32();
+            fp.CFGScale = root.RootElement.GetProperty("cfg").GetDecimal();
+            fp.Height = root.RootElement.GetProperty("height").GetInt32();
+            fp.Width = root.RootElement.GetProperty("width").GetInt32();
+            fp.Seed = root.RootElement.GetProperty("seed").GetInt64();
+            fp.Sampler = root.RootElement.GetProperty("sampler").GetString();
+            fp.Model = root.RootElement.GetProperty("base_model").GetString();
 
             fp.OtherParameters = $"Steps: {fp.Steps} Sampler: {fp.Sampler} CFG Scale: {fp.CFGScale} Size: {fp.Width}x{fp.Height}";
 
